@@ -9,33 +9,40 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # --- マッピング定義読み込み ---
 @st.cache_data
-async def load_mapping(path: str) -> dict:
+def load_mapping(path: str) -> dict:
     df_map = pd.read_excel(path, sheet_name='Sheet1', header=None)
     mapping = {}
     for i in range(0, len(df_map), 2):
-        raw, norm = df_map.iloc[i], df_map.iloc[i+1]
+        raw = df_map.iloc[i]
+        norm = df_map.iloc[i+1]
         client = raw.iloc[0]
-        if pd.isna(client): continue
-        col_map = {raw[j]: norm[j] for j in range(2, len(raw)) 
-                   if pd.notna(raw[j]) and pd.notna(norm[j])}
+        if pd.isna(client):
+            continue
+        col_map = {}
+        for j in range(2, len(raw)):
+            raw_field = raw.iloc[j]
+            norm_field = norm.iloc[j]
+            if pd.notna(raw_field) and pd.notna(norm_field):
+                col_map[raw_field] = norm_field
         mapping[client] = col_map
     return mapping
 
-mapping_dict = st.cache_data(lambda: load_mapping(MAPPING_FILE))()
-# 統一表示項目リスト
+# マッピングと統一項目をロード
+mapping_dict = load_mapping(MAPPING_FILE)
 unified_cols = sorted({v for cols in mapping_dict.values() for v in cols.values()})
 
+# アプリタイトル
 st.title('①案件更新 & マスタ管理')
 
-# --- サイドバー操作 ---
+# モード選択
 mode = st.sidebar.selectbox('モード選択', ['データ更新', 'マスタ確認'])
 
 if mode == 'データ更新':
     st.header('クライアントデータ更新 (ドラッグ＆ドロップ)')
-    files = st.file_uploader('Excelファイルを選択', type='xlsx', accept_multiple_files=True)
-    if files:
-        for f in files:
-            client = f.name.replace('.xlsx','')
+    uploaded_files = st.file_uploader('Excelファイルを選択', type='xlsx', accept_multiple_files=True)
+    if uploaded_files:
+        for f in uploaded_files:
+            client = os.path.splitext(f.name)[0]
             st.write(f'▶ 更新処理: {client}')
             df_raw = pd.read_excel(f)
             if client not in mapping_dict:
@@ -45,14 +52,12 @@ if mode == 'データ更新':
             cols = [c for c in unified_cols if c in df_norm.columns]
             df_sel = df_norm[cols].copy()
             df_sel.insert(0, 'client_name', client)
-            # Parquet に保存
             path = os.path.join(DATA_DIR, f'{client}.parquet')
             df_sel.to_parquet(path, index=False)
             st.success(f'{client} を更新しました')
 
 elif mode == 'マスタ確認':
     st.header('全クライアントマスタプレビュー')
-    # ディレクトリ内の Parquet 読込
     dfs = []
     for fn in os.listdir(DATA_DIR):
         if fn.endswith('.parquet'):
