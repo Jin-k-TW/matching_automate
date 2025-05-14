@@ -4,39 +4,38 @@ import os
 
 # --- 定数 ---
 DATA_DIR = 'data'
+MAPPING_FILE = 'mapping_fixed.xlsx'
 os.makedirs(DATA_DIR, exist_ok=True)
 
+st.set_page_config(page_title="案件更新アプリ", layout="wide")
 st.title('①案件更新｜クライアント別データ統一アプリ')
 
-# --- マッピングファイルアップロード ---
-st.sidebar.header('ステップ1：マッピングファイルをアップロード')
-mapping_file = st.sidebar.file_uploader('マッピングファイル（Excel）', type='xlsx')
-
+# --- 固定マッピングファイル読み込み ---
 mapping_dict = {}
 unified_cols = []
 
-if mapping_file:
-    df_map = pd.read_excel(mapping_file, sheet_name=0, header=None)
-    for i in range(0, len(df_map), 2):
-        raw = df_map.iloc[i]
-        norm = df_map.iloc[i+1]
-        client = str(raw.iloc[0]).strip()
-        if pd.isna(client): continue
-        col_map = {}
-        for j in range(2, len(raw)):
-            raw_field = raw.iloc[j]
-            norm_field = norm.iloc[j]
-            if pd.notna(raw_field) and pd.notna(norm_field):
-                col_map[raw_field] = norm_field
-        mapping_dict[client] = col_map
-    unified_cols = sorted({v for d in mapping_dict.values() for v in d.values()})
-else:
-    st.warning('サイドバーからマッピングファイルをアップロードしてください。')
+try:
+    df_map = pd.read_excel(MAPPING_FILE)
+    required_cols = ['クライアント名', '生データ項目', '統一後タイトル']
+    if all(col in df_map.columns for col in required_cols):
+        for client in df_map['クライアント名'].unique():
+            sub_df = df_map[df_map['クライアント名'] == client]
+            mapping_dict[client] = dict(zip(sub_df['生データ項目'], sub_df['統一後タイトル']))
+        unified_cols = sorted(df_map['統一後タイトル'].unique().tolist())
+    else:
+        st.error("mapping_fixed.xlsx に必要な列（クライアント名、生データ項目、統一後タイトル）が見つかりません")
+except FileNotFoundError:
+    st.error("mapping_fixed.xlsx がリポジトリ内に見つかりません。アップロードまたは配置してください。")
 
 # --- データ更新処理 ---
 if mapping_dict:
-    st.header('ステップ2：案件Excelをドラッグ＆ドロップ')
-    uploaded_files = st.file_uploader('クライアント案件ファイルをアップロード（複数可）', type='xlsx', accept_multiple_files=True)
+    st.header('ステップ：案件Excelをドラッグ＆ドロップ')
+    uploaded_files = st.file_uploader(
+        label='📂 クライアント案件ファイルをアップロード（複数可）',
+        type='xlsx',
+        accept_multiple_files=True,
+        help='ファイル名＝クライアント名、シートは1枚のみとしてください'
+    )
 
     if uploaded_files:
         combined_data = []
@@ -50,7 +49,7 @@ if mapping_dict:
                 continue
 
             try:
-                df_raw = pd.read_excel(file, sheet_name=0)  # 1シート限定を前提
+                df_raw = pd.read_excel(file, sheet_name=0)
                 col_map = mapping_dict[client_name]
                 df_renamed = df_raw.rename(columns=col_map)
                 cols_to_use = [c for c in unified_cols if c in df_renamed.columns]
@@ -59,7 +58,6 @@ if mapping_dict:
 
                 combined_data.append(df_final)
 
-                # 保存
                 save_path = os.path.join(DATA_DIR, f'{client_name}.parquet')
                 df_final.to_parquet(save_path, index=False)
                 st.success(f'✅ {client_name} データを保存しました')
@@ -67,7 +65,6 @@ if mapping_dict:
             except Exception as e:
                 st.error(f'⚠️ エラー発生: {e}')
 
-        # 全体プレビュー
         if combined_data:
             df_all = pd.concat(combined_data, ignore_index=True)
             st.subheader('✅ 統一形式での結合結果')
